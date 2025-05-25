@@ -4,6 +4,8 @@
 ## 🎯 Project Title: **Node.js App Monitoring on Kubernetes with Prometheus and Grafana**
 
 ---
+> As part of our infrastructure monitoring initiative, we needed a scalable solution to visualize the health and performance of our microservices running in Kubernetes. This project demonstrates how we implemented a full observability stack using Prometheus for metric collection, Grafana for real-time dashboards, Alertmanager for proactive notifications, and supporting tools like Node Exporter and Kube-State-Metrics for deep system and cluster visibility. We containerized a Node.js application with custom metrics and deployed the entire stack on Minikube, integrating persistent storage and alerting to simulate a production-grade environment. This setup helped our DevOps team rapidly identify performance bottlenecks, track application trends, and ensure high system availability through timely alerts.
+---
 
 ### ✅ Objective
 
@@ -28,378 +30,35 @@ Set up **Prometheus** to scrape metrics from a Node.js application and **Grafana
 
 ```
 monitoring-project/
-├── app/                             # Node.js app exposing /metrics
-├── k8s/
-│   ├── namespace.yaml               # (Optional) Create a namespace
-│   ├── app-deployment.yaml         # Deploy Node.js app
-│   ├── app-service.yaml            # ClusterIP service for the app
-│   ├── prometheus-deployment.yaml  # Deploy Prometheus with config & PVC
-│   ├── prometheus-service.yaml     # NodePort to access Prometheus
-│   ├── grafana-deployment.yaml     # Deploy Grafana with PVC
-│   ├── grafana-service.yaml        # NodePort to access Grafana
-│   ├── alertmanager-deployment.yaml
-│   ├── alertmanager-service.yaml
-│   ├── node-exporter-daemonset.yaml
-│   ├── kube-state-metrics.yaml
-│   ├── pvc-prometheus.yaml
-│   ├── pvc-grafana.yaml
-│   └── config/
-│       ├── prometheus-config.yaml
-│       └── alertmanager-config.yaml
-```
-
----
-## setup_monitoring.py
-
-```python
-
-import os
-
-base_dir = "/home/lili/monitoring-project"
-structure = {
-    "app/index.js": """\
-const express = require('express');
-const app = express();
-const client = require('prom-client');
-
-const collectDefaultMetrics = client.collectDefaultMetrics;
-collectDefaultMetrics();
-
-app.get('/', (req, res) => {
-  res.send('Hello from Node.js!');
-});
-
-app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', client.register.contentType);
-  res.end(await client.register.metrics());
-});
-
-app.listen(3000, () => {
-  console.log('App running on port 3000');
-});
-""",
-    "app/package.json": """\
-{
-  "name": "node-monitoring-app",
-  "version": "1.0.0",
-  "main": "index.js",
-  "dependencies": {
-    "express": "^4.18.2",
-    "prom-client": "^14.1.1"
-  }
-}
-""",
-    "k8s/namespace.yaml": """\
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
-""",
-    "k8s/app-deployment.yaml": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: node-app
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: node-app
-  template:
-    metadata:
-      labels:
-        app: node-app
-    spec:
-      containers:
-      - name: node-app
-        image: laly9999/node-monitoring-app:1
-        ports:
-        - containerPort: 3000
-""",
-    "k8s/app-service.yaml": """\
-apiVersion: v1
-kind: Service
-metadata:
-  name: node-app-service
-  namespace: monitoring
-spec:
-  selector:
-    app: node-app
-  ports:
-    - protocol: TCP
-      port: 3000
-      targetPort: 3000
-  type: ClusterIP
-""",
-    "k8s/prometheus-deployment.yaml": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: prometheus
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: prometheus
-  template:
-    metadata:
-      labels:
-        app: prometheus
-    spec:
-      containers:
-        - name: prometheus
-          image: prom/prometheus
-          args:
-            - "--config.file=/etc/prometheus/prometheus.yml"
-          ports:
-            - containerPort: 9090
-          volumeMounts:
-            - name: config-volume
-              mountPath: /etc/prometheus/
-            - name: data
-              mountPath: /prometheus
-      volumes:
-        - name: config-volume
-          configMap:
-            name: prometheus-config
-        - name: data
-          persistentVolumeClaim:
-            claimName: prometheus-pvc
-""",
-    "k8s/prometheus-service.yaml": """\
-apiVersion: v1
-kind: Service
-metadata:
-  name: prometheus-service
-  namespace: monitoring
-spec:
-  selector:
-    app: prometheus
-  ports:
-    - port: 9090
-      targetPort: 9090
-      nodePort: 30090
-  type: NodePort
-""",
-    "k8s/grafana-deployment.yaml": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: grafana
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: grafana
-  template:
-    metadata:
-      labels:
-        app: grafana
-    spec:
-      containers:
-      - name: grafana
-        image: grafana/grafana
-        ports:
-        - containerPort: 3000
-        volumeMounts:
-          - name: grafana-storage
-            mountPath: /var/lib/grafana
-      volumes:
-        - name: grafana-storage
-          persistentVolumeClaim:
-            claimName: grafana-pvc
-""",
-    "k8s/grafana-service.yaml": """\
-apiVersion: v1
-kind: Service
-metadata:
-  name: grafana-service
-  namespace: monitoring
-spec:
-  selector:
-    app: grafana
-  ports:
-    - port: 3000
-      targetPort: 3000
-      nodePort: 30300
-  type: NodePort
-""",
-    "k8s/alertmanager-deployment.yaml": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: alertmanager
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: alertmanager
-  template:
-    metadata:
-      labels:
-        app: alertmanager
-    spec:
-      containers:
-        - name: alertmanager
-          image: prom/alertmanager
-          args:
-            - "--config.file=/etc/alertmanager/config.yml"
-          volumeMounts:
-            - name: config-volume
-              mountPath: /etc/alertmanager/
-      volumes:
-        - name: config-volume
-          configMap:
-            name: alertmanager-config
-""",
-    "k8s/alertmanager-service.yaml": """\
-apiVersion: v1
-kind: Service
-metadata:
-  name: alertmanager-service
-  namespace: monitoring
-spec:
-  selector:
-    app: alertmanager
-  ports:
-    - port: 9093
-      targetPort: 9093
-      nodePort: 30903
-  type: NodePort
-""",
-    "k8s/node-exporter-daemonset.yaml": """\
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: node-exporter
-  namespace: monitoring
-spec:
-  selector:
-    matchLabels:
-      app: node-exporter
-  template:
-    metadata:
-      labels:
-        app: node-exporter
-    spec:
-      containers:
-        - name: node-exporter
-          image: prom/node-exporter
-          ports:
-            - containerPort: 9100
-              name: metrics
-""",
-    "k8s/kube-state-metrics.yaml": """\
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: kube-state-metrics
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: kube-state-metrics
-  template:
-    metadata:
-      labels:
-        app: kube-state-metrics
-    spec:
-      containers:
-        - name: kube-state-metrics
-          image: k8s.gcr.io/kube-state-metrics/kube-state-metrics:v2.10.1
-          ports:
-            - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: kube-state-metrics
-  namespace: monitoring
-spec:
-  ports:
-    - port: 8080
-      targetPort: 8080
-  selector:
-    app: kube-state-metrics
-""",
-    "k8s/pvc-prometheus.yaml": """\
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: prometheus-pvc
-  namespace: monitoring
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 2Gi
-""",
-    "k8s/pvc-grafana.yaml": """\
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: grafana-pvc
-  namespace: monitoring
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 2Gi
-""",
-    "k8s/config/prometheus-config.yaml": """\
-global:
-  scrape_interval: 15s
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: ['alertmanager-service:9093']
-scrape_configs:
-  - job_name: 'node-app'
-    static_configs:
-      - targets: ['node-app-service:3000']
-  - job_name: 'kube-state-metrics'
-    static_configs:
-      - targets: ['kube-state-metrics:8080']
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['node-exporter:9100']
-  - job_name: 'alertmanager'
-    static_configs:
-      - targets: ['alertmanager-service:9093']
-""",
-    "k8s/config/alertmanager-config.yaml": """\
-global:
-  resolve_timeout: 5m
-
-route:
-  receiver: "default"
-
-receivers:
-  - name: "default"
-    email_configs:
-      - to: "your-email@example.com"
-        from: "alertmanager@example.com"
-        smarthost: "smtp.example.com:587"
-        auth_username: "alertmanager@example.com"
-        auth_password: "yourpassword"
-"""
-}
-
-# Create directories and write files
-for path, content in structure.items():
-    file_path = os.path.join(base_dir, path)
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w") as f:
-        f.write(content)
-
-"All files created successfully in /home/lili/monitoring-project."
+├── app/                                           # Node.js app exposing Prometheus metrics
+│   ├── index.js                                   # Express app serving '/' and '/metrics' using prom-client
+│   ├── package.json                               # Defines dependencies like express and prom-client
+│   └── Dockerfile                                 # Dockerfile to build the Node.js metrics app image
+│
+├── k8s/                                           # Kubernetes manifests for app + monitoring stack
+│   ├── namespace.yaml                             # (Optional) Namespace to group all monitoring resources
+│
+│   ├── app-deployment.yaml                        # Deploys the Node.js app with 1 replica
+│   ├── app-service.yaml                           # ClusterIP service exposing app on port 3000
+│
+│   ├── prometheus-deployment.yaml                 # Deploys Prometheus with PVC and config volume
+│   ├── prometheus-service.yaml                    # NodePort service exposing Prometheus on port 9090
+│
+│   ├── grafana-deployment.yaml                    # Deploys Grafana with PVC for dashboard persistence
+│   ├── grafana-service.yaml                       # NodePort service exposing Grafana on port 3000
+│
+│   ├── alertmanager-deployment.yaml               # Deploys Alertmanager with config volume
+│   ├── alertmanager-service.yaml                  # NodePort service exposing Alertmanager on port 9093
+│
+│   ├── node-exporter-daemonset.yaml               # DaemonSet that runs node-exporter on each node for system metrics
+│   ├── kube-state-metrics.yaml                    # Deployment + service to expose Kubernetes object metrics (pods, nodes, etc.)
+│
+│   ├── pvc-prometheus.yaml                        # PersistentVolumeClaim for Prometheus data storage
+│   ├── pvc-grafana.yaml                           # PersistentVolumeClaim for Grafana data and dashboards
+│
+│   └── config/                                    # Configuration files for Prometheus and Alertmanager
+│       ├── prometheus-config.yaml                 # Defines scrape targets: app, node-exporter, kube-state-metrics, alertmanager
+│       └── alertmanager-config.yaml               # Alertmanager routes + email/SMS/Slack notification setup
 
 ```
 
@@ -453,6 +112,7 @@ CMD ["node", "index.js"]
 Build & push the image:
 
 ```bash
+# From inside the app/ directory
 docker build -t laly9999/node-monitoring-app:1 .
 docker push laly9999/node-monitoring-app:1
 ```
