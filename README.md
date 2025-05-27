@@ -302,7 +302,7 @@ kubectl logs -n monitoring -l app=prometheus
 
 ```
 #kubectl rollout restart deployment prometheus -n monitoring
-```
+
 
 ---
 
